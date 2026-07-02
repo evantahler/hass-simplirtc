@@ -45,6 +45,8 @@ from .protobufs.livekit_rtc_pb2 import (
 
 _LOGGER = logging.getLogger(__name__)
 WEBRTC_URL_BASE = "https://app-hub.prd.aser.simplisafe.com/v2"
+WAKEUP_URL_BASE = "https://app-hub.prd.aser.simplisafe.com/v1"
+WAKE_DEBOUNCE_SECONDS = 10.0
 _StreamResponseT = TypeVar("_StreamResponseT")
 
 
@@ -122,6 +124,26 @@ class SimpliSafeCamera(SimpliSafeEntity, CameraEntity):
 		self._attr_unique_id = f"{super().unique_id}-camera"
 		self._attr_supported_features |= CameraEntityFeature.STREAM
 		self._device: Camera
+		self._last_wake_monotonic: float = 0.0
+
+	async def _async_wake_cameras(self) -> None:
+		"""Nudge idle cameras to (re)join the streaming room before a stream starts.
+
+		A camera can report "online" yet not be publishing to the room; this signals
+		it to join. Fire-and-forget: the endpoint returns 202 and failures are non-fatal.
+		Debounced so overlapping/rapid stream starts don't spam the endpoint.
+		"""
+		now = time.monotonic()
+		if now - self._last_wake_monotonic < WAKE_DEBOUNCE_SECONDS:
+			return
+		self._last_wake_monotonic = now
+		path = f"ss3/subscriptions/{self._system.system_id}/camera-wakeup"
+		try:
+			await self._simplisafe._api.async_request(  # pyright: ignore[reportPrivateUsage]
+				"post", path, url_base=WAKEUP_URL_BASE, json={"wakeAll": True}
+			)
+		except Exception as err:
+			_LOGGER.debug("Failed to wake cameras for %s: %s", self.entity_id, err)
 
 	async def _create_stream(self, response_type: type[_StreamResponseT]) -> _StreamResponseT:
 		path = f"cameras/{self._device.serial}/{self._system.system_id}/live-view"
@@ -225,6 +247,7 @@ class SimpliSafeLiveKitCamera(SimpliSafeCamera):
 		self, offer_sdp: str, session_id: str, send_message: WebRTCSendMessage
 	) -> None:
 		"""Handle a browser WebRTC offer through LiveKit signaling."""
+		await self._async_wake_cameras()
 		livekit_url, user_token = await self._live_view()
 
 		def send_answer(answer: SessionDescription) -> None:
@@ -354,6 +377,7 @@ class SimpliSafeKenisisCamera(SimpliSafeCamera):
 	) -> None:
 		"""Handle a Kinesis WebRTC offer."""
 
+		await self._async_wake_cameras()
 		self._sessions[session_id] = session_future = self.hass.async_create_task(
 			self._create_webrtc_session(session_id, send_message)
 		)
