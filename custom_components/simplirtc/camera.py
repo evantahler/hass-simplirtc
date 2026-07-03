@@ -305,15 +305,17 @@ class SimpliSafeGo2rtcCamera(SimpliSafeCamera):
 
 			entries = self.hass.config_entries.async_entries(GO2RTC_DOMAIN)
 			if not entries:
+				_LOGGER.error("SimpliRTC go2rtc RTSP: no go2rtc config entry found")
 				return None
 			client = entries[0].runtime_data._rest_client  # pyright: ignore[reportAttributeAccessIssue]
 			name = f"simplirtc_{self._device.serial}"
 			await client.streams.add(name, [source])
+			_LOGGER.info("SimpliRTC go2rtc RTSP registered %s -> %s", name, source)
 			return f"rtsp://127.0.0.1:{GO2RTC_RTSP_PORT}/{name}"
 		except Exception as err:
-			_LOGGER.debug(
-				"go2rtc RTSP publish failed for %s; using direct go2rtc source: %s",
-				self.entity_id, err,
+			_LOGGER.error(
+				"SimpliRTC go2rtc RTSP publish failed for %s: %r (source=%s)",
+				self.entity_id, err, source,
 			)
 			return None
 
