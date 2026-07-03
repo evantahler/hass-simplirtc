@@ -217,13 +217,12 @@ class SimpliSafeGo2rtcCamera(SimpliSafeCamera):
 	"""A SimpliSafe camera that streams the legacy FLV media endpoint via go2rtc.
 
 	Cameras without a supported WebRTC backend (for example the video doorbell)
-	stream over SimpliSafe's FLV media endpoint. Home Assistant's built-in
-	stream worker decodes media in-process and libav crashes hard on this FLV,
-	so the live view is served through the bundled go2rtc instead:
-	``stream_source`` returns an ``ffmpeg:`` source pointing at a local proxy
-	view, which go2rtc reads out-of-process. HA's in-process libav can never
-	open the ``ffmpeg:`` scheme, so it never demuxes the FLV and cannot crash on
-	it. Snapshots use the MJPEG endpoint over plain HTTP.
+	stream over SimpliSafe's FLV media endpoint, whose quirks (bearer-header
+	auth, wildly non-monotonic timestamps, AVCC H264) break Home Assistant's
+	in-process stream worker. Instead, a local proxy view (see ``web.py``)
+	re-muxes the authenticated FLV out-of-process with ffmpeg, and this camera
+	publishes that through the bundled go2rtc as plain RTSP so HomeKit, HLS and
+	WebRTC can all consume it. Snapshots use the MJPEG endpoint over plain HTTP.
 	"""
 
 	def __init__(
