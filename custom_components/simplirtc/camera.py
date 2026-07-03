@@ -272,24 +272,25 @@ class SimpliSafeGo2rtcCamera(SimpliSafeCamera):
 			f"http://127.0.0.1:{port}/api/simplirtc_flv/{self.entity_id}"
 			f"?sig={self._proxy_token}"
 		)
-		# Publish through go2rtc as plain RTSP so HomeKit, HLS and WebRTC all
-		# consume it with no per-camera config; go2rtc decodes the FLV
-		# out-of-process and HA's in-process libav only ever sees clean H264 RTSP.
-		# Falls back to the go2rtc source if the go2rtc client is unreachable.
+		# Publish the FLV through go2rtc as plain RTSP so HomeKit, HLS and WebRTC
+		# all consume it with no per-camera config. go2rtc decodes the FLV
+		# out-of-process (HA's in-process libav only ever sees clean H264 RTSP).
 		#
-		# The SimpliSafe FLV carries wildly non-monotonic timestamps, which
-		# garble the RTSP output (HomeKit's ffmpeg clamps the DTS and the picture
-		# freezes). ``-use_wallclock_as_timestamps 1`` on the ffmpeg input
-		# rewrites them to a monotonic clock at ingestion, so every downstream
-		# consumer gets a clean stream. The ``#input=`` value replaces go2rtc's
-		# default http input template (``-fflags nobuffer -flags low_delay``).
+		# Use an explicit ffmpeg exec command: the SimpliSafe FLV carries wildly
+		# non-monotonic timestamps, which freeze HomeKit's ffmpeg (it clamps the
+		# DTS). ``-use_wallclock_as_timestamps 1`` on the input rewrites them to a
+		# monotonic clock at ingestion, so every downstream consumer gets a clean
+		# stream. ``{output}`` is substituted by go2rtc with its RTSP ingest URL.
 		go2rtc_source = (
-			f"ffmpeg:{proxy_url}#video=copy#audio=copy"
-			"#input=-fflags nobuffer -flags low_delay -use_wallclock_as_timestamps 1 -i {input}"
+			"exec:ffmpeg -hide_banner -loglevel error "
+			"-fflags nobuffer -flags low_delay -use_wallclock_as_timestamps 1 "
+			f"-i {proxy_url} "
+			"-c:v copy -c:a copy -rtsp_transport tcp -f rtsp {output}"
 		)
-		if rtsp := await self._async_ensure_go2rtc_rtsp(go2rtc_source):
-			return rtsp
-		return go2rtc_source
+		# Return the go2rtc RTSP URL, or None if go2rtc can't be reached. Never
+		# fall back to the raw go2rtc source string: ffmpeg-based consumers like
+		# the HomeKit bridge would try to open it as a file and fail.
+		return await self._async_ensure_go2rtc_rtsp(go2rtc_source)
 
 	async def _async_ensure_go2rtc_rtsp(self, source: str) -> str | None:
 		"""Publish the FLV source through go2rtc and return its RTSP URL.
