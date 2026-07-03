@@ -89,13 +89,18 @@ class SimpliRTCFlvProxyView(HomeAssistantView):
 			# Keep retrying the source until the woken camera starts publishing.
 			"-reconnect", "1", "-reconnect_at_eof", "1",
 			"-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+			# Shrink input analysis/buffering so the first frame ships fast
+			# (ffmpeg defaults to ~5s analysis, which lengthens the cold start).
+			"-fflags", "nobuffer", "-analyzeduration", "2000000", "-probesize", "2000000",
 			# Rewrite the FLV's non-monotonic timestamps to a monotonic clock.
 			"-use_wallclock_as_timestamps", "1",
 			"-headers", f"Authorization: Bearer {token}\r\n",
 			"-i", camera.flv_url(width=STREAM_WIDTH),
-			# Copy video (no transcode) to keep CPU near zero; MPEG-TS stores
-			# H264 as Annex-B, which go2rtc copies into a valid RTSP stream.
-			"-c:v", "copy", "-an", "-f", "mpegts", "pipe:1",
+			# Copy video (near-zero CPU); MPEG-TS stores H264 as Annex-B, which
+			# go2rtc copies into a valid RTSP stream. Keep audio so go2rtc can
+			# transcode it to opus for RTSP (a straight copy of the FLV's AAC has
+			# no global headers and RTSP rejects it).
+			"-c:v", "copy", "-c:a", "copy", "-f", "mpegts", "pipe:1",
 		]
 		_LOGGER.debug("SimpliRTC flv ffmpeg[%s]: %s", entity_id, " ".join(cmd))
 

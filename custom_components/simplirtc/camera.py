@@ -279,7 +279,7 @@ class SimpliSafeGo2rtcCamera(SimpliSafeCamera):
 		# freeze HomeKit's ffmpeg — are fixed upstream in the proxy view, which
 		# re-muxes with a wallclock. go2rtc then decodes the already-clean FLV
 		# out-of-process into RTSP.
-		go2rtc_source = f"ffmpeg:{proxy_url}#video=copy"
+		go2rtc_source = f"ffmpeg:{proxy_url}#video=copy#audio=opus"
 		# Return the go2rtc RTSP URL, or None if go2rtc can't be reached. Never a
 		# raw go2rtc source string: ffmpeg-based consumers (HomeKit) choke on it.
 		return await self._async_ensure_go2rtc_rtsp(go2rtc_source)
