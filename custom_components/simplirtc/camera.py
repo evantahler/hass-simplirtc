@@ -273,23 +273,15 @@ class SimpliSafeGo2rtcCamera(SimpliSafeCamera):
 			f"?sig={self._proxy_token}"
 		)
 		# Publish the FLV through go2rtc as plain RTSP so HomeKit, HLS and WebRTC
-		# all consume it with no per-camera config. go2rtc decodes the FLV
-		# out-of-process (HA's in-process libav only ever sees clean H264 RTSP).
-		#
-		# Use an explicit ffmpeg exec command: the SimpliSafe FLV carries wildly
-		# non-monotonic timestamps, which freeze HomeKit's ffmpeg (it clamps the
-		# DTS). ``-use_wallclock_as_timestamps 1`` on the input rewrites them to a
-		# monotonic clock at ingestion, so every downstream consumer gets a clean
-		# stream. ``{output}`` is substituted by go2rtc with its RTSP ingest URL.
-		go2rtc_source = (
-			"exec:ffmpeg -hide_banner -loglevel error "
-			"-fflags nobuffer -flags low_delay -use_wallclock_as_timestamps 1 "
-			f"-i {proxy_url} "
-			"-c:v copy -c:a copy -rtsp_transport tcp -f rtsp {output}"
-		)
-		# Return the go2rtc RTSP URL, or None if go2rtc can't be reached. Never
-		# fall back to the raw go2rtc source string: ffmpeg-based consumers like
-		# the HomeKit bridge would try to open it as a file and fail.
+		# all consume it with no per-camera config. HA's managed go2rtc only
+		# accepts simple "ffmpeg:" sources through its API (it rejects "exec:" and
+		# custom input args), so the FLV's non-monotonic timestamps — which
+		# freeze HomeKit's ffmpeg — are fixed upstream in the proxy view, which
+		# re-muxes with a wallclock. go2rtc then decodes the already-clean FLV
+		# out-of-process into RTSP.
+		go2rtc_source = f"ffmpeg:{proxy_url}#video=copy#audio=copy"
+		# Return the go2rtc RTSP URL, or None if go2rtc can't be reached. Never a
+		# raw go2rtc source string: ffmpeg-based consumers (HomeKit) choke on it.
 		return await self._async_ensure_go2rtc_rtsp(go2rtc_source)
 
 	async def _async_ensure_go2rtc_rtsp(self, source: str) -> str | None:
