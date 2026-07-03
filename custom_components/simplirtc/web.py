@@ -15,8 +15,8 @@ from .camera import SimpliSafeGo2rtcCamera, SimpliSafeLiveKitCamera
 
 _LOGGER = logging.getLogger(__name__)
 
-# Request a smaller frame from SimpliSafe so the transcode stays cheap enough to
-# run in real time on modest hardware (the doorbell is 1080p by default).
+# Request a smaller frame from SimpliSafe to keep bandwidth/decode load down (the
+# doorbell is 1080p by default).
 STREAM_WIDTH = 640
 
 
@@ -46,14 +46,12 @@ class SimpliRTCStreamInfoView(HomeAssistantView):
 class SimpliRTCFlvProxyView(HomeAssistantView):
 	"""Re-mux the SimpliSafe doorbell FLV for go2rtc.
 
-	The doorbell's FLV carries wildly non-monotonic timestamps that freeze
-	HomeKit's ffmpeg, and HA's managed go2rtc only accepts simple "ffmpeg:"
-	sources via its API (no custom input args), so the fix cannot live in go2rtc.
-	Instead this view runs its own ffmpeg to read the authenticated FLV
-	out-of-process, rewrite timestamps to a monotonic wallclock, and stream the
-	result as clean FLV. go2rtc reads this endpoint with a plain "ffmpeg:" source
-	and republishes it as RTSP. ``-reconnect_at_eof`` keeps retrying until the
-	woken camera starts publishing. Access is gated by the per-camera token.
+	HA's managed go2rtc only accepts simple "ffmpeg:" sources via its API, so the
+	FLV's fixes have to happen here. This view runs its own ffmpeg to read the
+	authenticated FLV out-of-process and stream a clean MPEG-TS (Annex-B H264,
+	wallclock timestamps) that go2rtc copies into RTSP. Video is copied (no
+	transcode) to keep CPU low; ``-reconnect_at_eof`` keeps retrying until the
+	woken camera publishes. Access is gated by the per-camera token.
 	"""
 
 	url = "/api/simplirtc_flv/{entity_id}"
@@ -64,7 +62,7 @@ class SimpliRTCFlvProxyView(HomeAssistantView):
 		self.hass = hass
 
 	async def get(self, request: web.Request, entity_id: str) -> web.StreamResponse:
-		"""Wake the camera and relay a timestamp-corrected FLV via ffmpeg."""
+		"""Wake the camera and relay a cleaned MPEG-TS via ffmpeg."""
 
 		if not isinstance(
 			camera := self.hass.data[DATA_COMPONENT].get_entity(entity_id),
@@ -87,33 +85,36 @@ class SimpliRTCFlvProxyView(HomeAssistantView):
 			binary = "ffmpeg"
 
 		cmd = [
-			binary, "-hide_banner", "-loglevel", "error",
+			binary, "-hide_banner", "-loglevel", "warning",
 			# Keep retrying the source until the woken camera starts publishing.
 			"-reconnect", "1", "-reconnect_at_eof", "1",
 			"-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-			# NOTE: no "-re". The source is already live, and its non-monotonic
-			# timestamps make "-re" compute a bogus read rate that mispaces the
-			# stream and causes periodic stalls/deaths.
+			# Rewrite the FLV's non-monotonic timestamps to a monotonic clock.
+			"-use_wallclock_as_timestamps", "1",
 			"-headers", f"Authorization: Bearer {token}\r\n",
 			"-i", camera.flv_url(width=STREAM_WIDTH),
-			# Transcode rather than copy (matching the homebridge plugin's proven
-			# settings). The SimpliSafe FLV's H264 and timestamps break a straight
-			# copy through RTSP (unparseable "Invalid data", non-monotonic DTS);
-			# re-encoding regenerates a clean, monotonic, Annex-B H264 stream that
-			# go2rtc copies into a valid RTSP feed. Output MPEG-TS.
-			"-map", "0:v:0",
-			"-c:v", "libx264", "-tune", "zerolatency", "-preset", "ultrafast",
-			"-pix_fmt", "yuv420p",
-			# Audio dropped for now: go2rtc can't copy MPEG-TS ADTS AAC into RTSP
-			# ("AAC with no global headers"). Video-first; audio is a follow-up.
-			"-an",
-			"-f", "mpegts", "pipe:1",
+			# Copy video (no transcode) to keep CPU near zero; MPEG-TS stores
+			# H264 as Annex-B, which go2rtc copies into a valid RTSP stream.
+			"-c:v", "copy", "-an", "-f", "mpegts", "pipe:1",
 		]
+		_LOGGER.debug("SimpliRTC flv ffmpeg[%s]: %s", entity_id, " ".join(cmd))
 
 		proc = await asyncio.create_subprocess_exec(
 			*cmd,
 			stdout=asyncio.subprocess.PIPE,
-			stderr=asyncio.subprocess.DEVNULL,
+			stderr=asyncio.subprocess.PIPE,
+		)
+
+		async def _log_stderr() -> None:
+			assert proc.stderr is not None
+			async for line in proc.stderr:
+				_LOGGER.warning(
+					"SimpliRTC flv ffmpeg[%s]: %s",
+					entity_id, line.decode(errors="replace").rstrip(),
+				)
+
+		stderr_task = self.hass.async_create_background_task(
+			_log_stderr(), f"simplirtc-flv-stderr-{entity_id}"
 		)
 
 		response = web.StreamResponse(status=200, headers={"Content-Type": "video/mp2t"})
@@ -131,4 +132,5 @@ class SimpliRTCFlvProxyView(HomeAssistantView):
 				except ProcessLookupError:
 					pass
 				await proc.wait()
+			stderr_task.cancel()
 		return response
