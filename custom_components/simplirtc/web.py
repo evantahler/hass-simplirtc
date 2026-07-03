@@ -91,7 +91,10 @@ class SimpliRTCFlvProxyView(HomeAssistantView):
 			"-use_wallclock_as_timestamps", "1",
 			"-headers", f"Authorization: Bearer {token}\r\n",
 			"-i", camera.flv_url(),
-			"-c", "copy", "-f", "flv", "pipe:1",
+			# Output MPEG-TS: it stores H264 as Annex-B (with in-band SPS/PPS),
+			# which go2rtc can copy straight into a valid RTSP stream. FLV keeps
+			# H264 as AVCC, which produced unparseable RTSP ("Invalid data").
+			"-c", "copy", "-f", "mpegts", "pipe:1",
 		]
 
 		proc = await asyncio.create_subprocess_exec(
@@ -100,7 +103,7 @@ class SimpliRTCFlvProxyView(HomeAssistantView):
 			stderr=asyncio.subprocess.DEVNULL,
 		)
 
-		response = web.StreamResponse(status=200, headers={"Content-Type": "video/x-flv"})
+		response = web.StreamResponse(status=200, headers={"Content-Type": "video/mp2t"})
 		await response.prepare(request)
 		try:
 			assert proc.stdout is not None
