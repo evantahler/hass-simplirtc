@@ -87,14 +87,21 @@ class SimpliRTCFlvProxyView(HomeAssistantView):
 			# Keep retrying the source until the woken camera starts publishing.
 			"-reconnect", "1", "-reconnect_at_eof", "1",
 			"-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-			# Rewrite the FLV's non-monotonic timestamps to a monotonic clock.
-			"-use_wallclock_as_timestamps", "1",
+			"-re",
 			"-headers", f"Authorization: Bearer {token}\r\n",
 			"-i", camera.flv_url(),
-			# Output MPEG-TS: it stores H264 as Annex-B (with in-band SPS/PPS),
-			# which go2rtc can copy straight into a valid RTSP stream. FLV keeps
-			# H264 as AVCC, which produced unparseable RTSP ("Invalid data").
-			"-c", "copy", "-f", "mpegts", "pipe:1",
+			# Transcode rather than copy (matching the homebridge plugin's proven
+			# settings). The SimpliSafe FLV's H264 and timestamps break a straight
+			# copy through RTSP (unparseable "Invalid data", non-monotonic DTS);
+			# re-encoding regenerates a clean, monotonic, Annex-B H264 stream that
+			# go2rtc copies into a valid RTSP feed. Output MPEG-TS.
+			"-map", "0:v:0",
+			"-c:v", "libx264", "-tune", "zerolatency", "-preset", "superfast",
+			"-pix_fmt", "yuv420p",
+			# Audio dropped for now: go2rtc can't copy MPEG-TS ADTS AAC into RTSP
+			# ("AAC with no global headers"). Video-first; audio is a follow-up.
+			"-an",
+			"-f", "mpegts", "pipe:1",
 		]
 
 		proc = await asyncio.create_subprocess_exec(
