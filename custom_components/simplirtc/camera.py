@@ -276,7 +276,17 @@ class SimpliSafeGo2rtcCamera(SimpliSafeCamera):
 		# consume it with no per-camera config; go2rtc decodes the FLV
 		# out-of-process and HA's in-process libav only ever sees clean H264 RTSP.
 		# Falls back to the go2rtc source if the go2rtc client is unreachable.
-		go2rtc_source = f"ffmpeg:{proxy_url}#video=copy#audio=copy"
+		#
+		# The SimpliSafe FLV carries wildly non-monotonic timestamps, which
+		# garble the RTSP output (HomeKit's ffmpeg clamps the DTS and the picture
+		# freezes). ``-use_wallclock_as_timestamps 1`` on the ffmpeg input
+		# rewrites them to a monotonic clock at ingestion, so every downstream
+		# consumer gets a clean stream. The ``#input=`` value replaces go2rtc's
+		# default http input template (``-fflags nobuffer -flags low_delay``).
+		go2rtc_source = (
+			f"ffmpeg:{proxy_url}#video=copy#audio=copy"
+			"#input=-fflags nobuffer -flags low_delay -use_wallclock_as_timestamps 1 -i {input}"
+		)
 		if rtsp := await self._async_ensure_go2rtc_rtsp(go2rtc_source):
 			return rtsp
 		return go2rtc_source
