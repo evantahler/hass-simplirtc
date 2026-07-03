@@ -15,6 +15,10 @@ from .camera import SimpliSafeGo2rtcCamera, SimpliSafeLiveKitCamera
 
 _LOGGER = logging.getLogger(__name__)
 
+# Request a smaller frame from SimpliSafe so the transcode stays cheap enough to
+# run in real time on modest hardware (the doorbell is 1080p by default).
+STREAM_WIDTH = 640
+
 
 class SimpliRTCStreamInfoView(HomeAssistantView):
 	"""View to handle SimpliRTC stream info requests."""
@@ -91,14 +95,14 @@ class SimpliRTCFlvProxyView(HomeAssistantView):
 			# timestamps make "-re" compute a bogus read rate that mispaces the
 			# stream and causes periodic stalls/deaths.
 			"-headers", f"Authorization: Bearer {token}\r\n",
-			"-i", camera.flv_url(),
+			"-i", camera.flv_url(width=STREAM_WIDTH),
 			# Transcode rather than copy (matching the homebridge plugin's proven
 			# settings). The SimpliSafe FLV's H264 and timestamps break a straight
 			# copy through RTSP (unparseable "Invalid data", non-monotonic DTS);
 			# re-encoding regenerates a clean, monotonic, Annex-B H264 stream that
 			# go2rtc copies into a valid RTSP feed. Output MPEG-TS.
 			"-map", "0:v:0",
-			"-c:v", "libx264", "-tune", "zerolatency", "-preset", "superfast",
+			"-c:v", "libx264", "-tune", "zerolatency", "-preset", "ultrafast",
 			"-pix_fmt", "yuv420p",
 			# Audio dropped for now: go2rtc can't copy MPEG-TS ADTS AAC into RTSP
 			# ("AAC with no global headers"). Video-first; audio is a follow-up.
